@@ -19,8 +19,6 @@ class Context:
         message = update.get("message") or {}
         self.message = message
         self.body = message.get("body") or {}
-        self.sender = message.get("sender") or {}
-        self.recipient = message.get("recipient") or {}
 
         # mid исходного сообщения — нужен для reply
         self.mid: Optional[str] = self.body.get("mid")
@@ -29,8 +27,21 @@ class Context:
         self.command: Optional[str] = None
         self.args: str = ""
 
+        # --- кто инициатор ---
+        # Для message_callback автора нажатия надо брать из update.callback.user,
+        # а message.sender — это бот, отправивший сообщение с кнопкой.
+        callback = update.get("callback") or {}
+        if callback.get("user"):
+            self.sender = callback["user"]
+        else:
+            self.sender = message.get("sender") or update.get("user") or {}
+
+        self.recipient = message.get("recipient") or {}
+        if not self.recipient and update.get("chat_id") is not None:
+            self.recipient = {"chat_id": update.get("chat_id")}
+
         # callback
-        self.callback = update.get("callback") or {}
+        self.callback = callback
         self.callback_payload = self.callback.get("payload")
         if isinstance(self.callback_payload, dict):
             self.callback_payload = self.callback_payload.get("payload")
@@ -45,6 +56,7 @@ class Context:
         self.chat_type: Optional[str] = (
             self.recipient.get("chat_type") or update.get("chat_type")
         )
+
         # --- данные пользователя ---
         self.first_name: Optional[str] = self.sender.get("first_name")
         self.last_name: Optional[str] = self.sender.get("last_name")
@@ -79,6 +91,7 @@ class Context:
         reply_to: str | None = None,
         forward_from: str | None = None,
         fmt: str | None = None,
+        attachments: list | None = None,
         **kwargs,
     ) -> dict:
         """Ответ на сообщение (link.type = reply) по умолчанию.
@@ -101,6 +114,7 @@ class Context:
             user_id=None if self.chat_id else self.user_id,
             fmt=fmt,
             link=link,
+            attachments=attachments,
             **kwargs,
         )
 
@@ -122,6 +136,23 @@ class Context:
             f"chat_type={self.chat_type!r} text={self.text!r}>"
         )
 
+    @property
+    def attachments(self) -> list[dict]:
+        """Все вложения: обычные + из пересланного сообщения (link.type = forward)."""
+        result = list(self.body.get("attachments") or [])
+
+        # вложения могут лежать и на верхнем уровне message
+        result.extend(self.message.get("attachments") or [])
+
+        link = self.message.get("link") or {}
+        if link.get("type") == "forward":
+            fwd_msg = link.get("message") or {}
+            # вложения могут лежать и в message.attachments, и в message.body.attachments
+            result.extend(fwd_msg.get("attachments") or [])
+            fwd_body = fwd_msg.get("body") or {}
+            result.extend(fwd_body.get("attachments") or [])
+
+        return result
 
 class MaxBot:
 
@@ -238,7 +269,46 @@ class MaxBot:
                 payload["notify"] = notify
 
             return await self.request("POST", "/messages", params=params, json=payload)
+    async def edit_message(
+        self,
+        message_id: str,
+        text: str | None = None,
+        *,
+        attachments: list | None = None,
+        fmt: str | None = None,
+        link: dict | None = None,
+        notify: bool | None = None,
+    ) -> dict:
+        """PUT /messages?message_id=... — редактировать сообщение, отправленное ботом.
 
+        message_id — id сообщения (можно брать из ответа send_message: data["message"]["body"]["mid"]).
+        text — до 4000 символов, может быть None (тогда только вложения/кнопки).
+        attachments:
+        - None  → не трогать вложения (изменений не будет)
+        - []    → удалить все вложения
+        - [...] → заменить на новые
+        """
+        if message_id is None:
+            raise ValueError("Нужен message_id")
+
+        params = {"message_id": message_id}
+
+        payload: dict = {}
+        if text is not None:
+            payload["text"] = text
+        if fmt:
+            payload["format"] = fmt
+        if attachments is not None:
+            if isinstance(attachments, dict):
+                payload["attachments"] = [attachments]
+            else:
+                payload["attachments"] = list(attachments)
+        if link is not None:
+            payload["link"] = link
+        if notify is not None:
+            payload["notify"] = notify
+
+        return await self.request("PUT", "/messages", params=params, json=payload)
     # ---------- клавиатуры ----------
     @staticmethod
     def build_inline_keyboard(buttons: list[list[dict]]) -> dict:
@@ -311,6 +381,8 @@ class MaxBot:
         cmd = first[1:]  
         cmd = cmd.split("@", 1)[0].lower()
         return cmd, rest.strip()
+    
+    
 
     # ---------- вызов хендлера ----------
     async def _call_handler(self, handler, ctx: Context, label: str) -> None:
@@ -345,7 +417,6 @@ class MaxBot:
                 if command == "start" and self._started_handler is not None:
                     await self._call_handler(self._started_handler, ctx, "bot_started")
                     return
-                # неизвестная команда — падаем в общий message-хендлер
                 if self._message_handler is not None:
                     await self._call_handler(self._message_handler, ctx, "message")
                 return
@@ -396,6 +467,13 @@ class MaxBot:
         finally:
             await self.close()
             logger.info("Бот остановлен")
+    async def set_commands(self, commands: list[dict]) -> dict:
+        """PATCH /me/commands — задать список команд бота для подсказок при вводе «/».
 
+        commands: [{"name": "start", "description": "Запустить бота"}, ...]
+        Максимум 32 элемента; name 1–64 символа, description 1–128 (или None).
+        Пустой список — удалить все команды.
+        """
+        return await self.request("PATCH", "/me/commands", json={"commands": commands})
     def stop(self) -> None:
         self._running = False
