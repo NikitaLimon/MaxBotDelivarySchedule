@@ -3,6 +3,7 @@ import asyncio
 import os
 import uuid
 
+from route_yandex import get_coordinates_url
 from config import MAXBOT_TOKEN
 from ocr_ollama import handle_image
 from fsm import FSM
@@ -176,7 +177,7 @@ async def finish_screens(ctx, st):
     lines: list[str] = []
     addresses: list[str] = []   # только адреса — для порядка маршрута
     errors: list[str] = []
-
+    
     for idx, screen in enumerate(screens, 1):
         path = screen.get("path")
         if not path:
@@ -229,6 +230,8 @@ async def finish_screens(ctx, st):
         f"Введи последовательность номеров (например: `{''.join(str(i) for i in range(1, len(lines) + 1))}`)\n"
         "Или напиши «как есть», чтобы оставить текущий порядок."
     )
+    route_link = get_coordinates_url(addresses)
+    result += f"\n[Ссылка на маршут в Я.Картах]({route_link})"
     await ctx.send(result, fmt="markdown")
 
 
