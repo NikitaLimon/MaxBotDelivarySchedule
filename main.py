@@ -3,6 +3,7 @@ import asyncio
 import os
 import uuid
 
+from config import MAXBOT_TOKEN
 from ocr_ollama import handle_image
 from fsm import FSM
 from bot import MaxBot
@@ -10,7 +11,7 @@ from bot import MaxBot
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-bot = MaxBot("f9LHodD0cOJLHOBJ4-9Xt7loUbFPG3TFZfgqw7kOn4J4-xH3rkIt5clprOlDV1M5bGlmtvu1ngvWqSWbxXJE")
+bot = MaxBot(MAXBOT_TOKEN)
 fsm = FSM()
 
 

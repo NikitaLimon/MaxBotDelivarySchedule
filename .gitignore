@@ -1,3 +1,5 @@
 __pycache__/
 uploads/
 .vscode/
+test.py
+config.py
